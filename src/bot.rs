@@ -1,4 +1,4 @@
-use crate::shogi::pos2img;
+use crate::shogi::{last_move_ki2, pos2img, MoveChecker};
 use crate::{Error, Result};
 use bsky_sdk::api::app::bsky;
 use bsky_sdk::api::app::bsky::feed::defs::{PostView, ThreadViewPost, ThreadViewPostRepliesItem};
@@ -10,8 +10,7 @@ use bsky_sdk::api::records::{KnownRecord, Record};
 use bsky_sdk::api::types::string::Datetime;
 use bsky_sdk::api::types::Union;
 use bsky_sdk::BskyAgent;
-use shogi_core::{LegalityChecker, Move, Position};
-use shogi_legality_lite::LiteLegalityChecker;
+use shogi_core::{Position, ToUsi};
 use shogi_usi_parser::FromUsi;
 
 pub struct Bot {
@@ -28,35 +27,28 @@ impl Bot {
             return Err(Error::NotFeedPostRecord);
         };
         // retrieve latest position
-        let mut pos = if let Some(Union::Refs(RecordEmbedRefs::AppBskyEmbedImagesMain(images))) =
+        let pos = if let Some(Union::Refs(RecordEmbedRefs::AppBskyEmbedImagesMain(images))) =
             &record.embed
         {
             Position::from_usi(&images.images[0].alt)?
         } else {
             Default::default()
         };
-        let sfen = pos.to_sfen_owned();
-        log::debug!("{sfen}");
+        log::debug!("{}", pos.to_sfen_owned());
+        let mut checker = MoveChecker::new(pos)?;
         // find valid reply
         for reply in latest.data.replies.unwrap_or_default().iter().rev() {
             if let Union::Refs(ThreadViewPostRepliesItem::ThreadViewPost(post)) = reply {
                 if let Record::Known(KnownRecord::AppBskyFeedPost(record)) = &post.post.record {
-                    let text = record.text.trim();
-                    match Move::from_usi(text) {
-                        Ok(mv) => {
-                            match LiteLegalityChecker.make_move(&mut pos, mv) {
-                                Ok(()) => {
-                                    let output = self.reply_position(&post.post, &pos).await?;
-                                    log::info!("{output:?}");
-                                    break;
-                                }
-                                Err(e) => {
-                                    log::warn!("failed to move `{text}`: {e:?}");
-                                }
-                            };
+                    log::debug!("{}", record.text);
+                    match checker.try_move(&record.text) {
+                        Ok(pos) => {
+                            let output = self.reply_position(&post.post, pos).await?;
+                            log::info!("{:?}", output.data);
+                            break;
                         }
                         Err(e) => {
-                            log::warn!("failed to parse `{text}`: {e:?}");
+                            log::warn!("failed to move: {e:?}");
                         }
                     }
                 }
@@ -113,7 +105,14 @@ impl Bot {
     async fn reply_position(&self, post: &PostView, pos: &Position) -> Result<Output> {
         let embed = self.embed(pos).await?;
         let reply = Some(Self::reply_ref(post));
-        let text = format!("{}", pos.ply() - 1);
+        let mut text = format!("{}手目: ", pos.ply() - 1);
+        if let Some(mv) = pos.last_move() {
+            if let Ok(Some(ki2)) = last_move_ki2(pos) {
+                text.push_str(&format!("{ki2} ({})", mv.to_usi_owned()));
+            } else {
+                text.push_str(&mv.to_usi_owned());
+            }
+        }
         Ok(self
             .agent
             .create_record(bsky_sdk::api::app::bsky::feed::post::RecordData {
@@ -143,7 +142,7 @@ impl Bot {
                 langs: None,
                 reply: None,
                 tags: None,
-                text: String::from("test"),
+                text: String::from("start"),
             })
             .await?)
     }
@@ -177,11 +176,19 @@ impl Bot {
             .map_err(bsky_sdk::Error::from)?
             .data
             .blob;
+        let alt = format!(
+            "startpos moves {}",
+            pos.moves()
+                .iter()
+                .map(|mv| mv.to_usi_owned())
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
         Ok(Some(Union::Refs(
             bsky::feed::post::RecordEmbedRefs::AppBskyEmbedImagesMain(Box::new(
                 bsky::embed::images::MainData {
                     images: vec![bsky::embed::images::ImageData {
-                        alt: format!("sfen {}", pos.to_sfen_owned()),
+                        alt,
                         aspect_ratio: Some(
                             bsky::embed::images::AspectRatioData {
                                 height: u64::from(height)
