@@ -1,0 +1,16 @@
+{
+  "deploy": {
+    "exclude": [
+      "**/node_modules"
+    ],
+    "include": [
+      "main.ts",
+      "pkg"
+    ],
+    "entrypoint": "main.ts"
+  },
+  "tasks": {
+    "build": "wasm-pack build --target deno --release",
+    "start": "deno run --allow-read --allow-net --allow-env --env --unstable-kv --unstable-cron main.ts"
+  }
+}
