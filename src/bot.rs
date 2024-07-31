@@ -90,7 +90,7 @@ impl Bot {
             .get_post_thread(
                 bsky::feed::get_post_thread::ParametersData {
                     depth: 1.try_into().ok(),
-                    parent_height: 500.try_into().ok(),
+                    parent_height: 5.try_into().ok(),
                     uri: feed[0].post.uri.clone(),
                 }
                 .into(),

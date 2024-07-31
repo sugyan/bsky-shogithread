@@ -11,6 +11,9 @@ pub enum Error {
     ShogiKifuConverter(#[from] shogi_kifu_converter::error::ConvertError),
     #[error(transparent)]
     ShogiKifuParse(#[from] shogi_kifu_converter::error::ParseError),
+    #[cfg(target_arch = "wasm32")]
+    #[error(transparent)]
+    SerdeJson(#[from] serde_json::Error),
     #[error("illegal move: {0:?}")]
     ShogiCoreIllegaleMove(shogi_core::IllegalMoveKind),
     #[error("not thread view post")]

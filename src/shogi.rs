@@ -1,5 +1,5 @@
 use crate::error::{Error, Result};
-use shogi_core::{LegalityChecker, Move, Position};
+use shogi_core::{LegalityChecker, Move, Piece, Position};
 use shogi_img::{image::codecs::png::PngEncoder, Generator, HighlightSquare};
 use shogi_kifu_converter::{converter::ToKi2, parser::parse_ki2_str, JKF};
 use shogi_legality_lite::LiteLegalityChecker;
@@ -20,6 +20,13 @@ impl MoveChecker {
         let s = text.split_whitespace().next().unwrap_or_default();
         // first, try to parse as usi format
         let mv = Move::from_usi(text)
+            .map(|mut mv| {
+                // https://docs.rs/shogi_usi_parser/latest/shogi_usi_parser/trait.FromUsi.html#impl-FromUsi-for-Move
+                if let Move::Drop { piece, to: _ } = &mut mv {
+                    *piece = Piece::new(piece.piece_kind(), self.pos.side_to_move());
+                }
+                mv
+            })
             // next, try to parse as ki2 format
             .or_else(|_| {
                 let mut s = s.to_string();
