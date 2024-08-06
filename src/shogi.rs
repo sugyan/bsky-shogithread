@@ -1,12 +1,12 @@
 use crate::error::{Error, Result};
-use shogi_core::{LegalityChecker, Move, Piece, Position};
+use shogi_core::{LegalityChecker, Move, Piece, Position, PositionStatus, ToUsi};
 use shogi_img::{image::codecs::png::PngEncoder, Generator, HighlightSquare};
 use shogi_kifu_converter::{converter::ToKi2, parser::parse_ki2_str, JKF};
 use shogi_legality_lite::LiteLegalityChecker;
 use shogi_usi_parser::FromUsi;
 
 pub struct MoveChecker {
-    pos: Position,
+    pub pos: Position,
     ki2: String,
 }
 
@@ -16,7 +16,10 @@ impl MoveChecker {
         let ki2 = jkf.to_ki2_owned().trim().to_string();
         Ok(Self { pos, ki2 })
     }
-    pub fn try_move(&mut self, text: &str) -> Result<&Position> {
+    pub fn status(&self) -> PositionStatus {
+        LiteLegalityChecker.status(&self.pos)
+    }
+    pub fn try_move(&mut self, text: &str) -> Result<()> {
         let s = text.split_whitespace().next().unwrap_or_default();
         // first, try to parse as usi format
         let mv = Move::from_usi(text)
@@ -43,14 +46,18 @@ impl MoveChecker {
                 ] {
                     s = s.replace(from, to);
                 }
-                let jkf = parse_ki2_str(&format!("{} {s}", self.ki2))?;
+                let jkf = parse_ki2_str(format!("{} {s}", self.ki2).trim())?;
                 Ok::<Move, Error>(Position::try_from(&jkf)?.last_move().unwrap())
             })?;
         LiteLegalityChecker
             .make_move(&mut self.pos, mv)
-            .map_err(Error::ShogiCoreIllegaleMove)?;
-        Ok(&self.pos)
+            .map_err(Error::ShogiCoreIllegaleMove)
     }
+}
+
+pub fn pos2usi(pos: &Position) -> Result<String> {
+    let jkf = JKF::try_from(pos)?;
+    Ok(jkf.to_usi_owned())
 }
 
 pub fn pos2img(pos: &Position) -> (Vec<u8>, (u32, u32)) {

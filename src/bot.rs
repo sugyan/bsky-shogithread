@@ -1,4 +1,4 @@
-use crate::shogi::{last_move_ki2, pos2img, MoveChecker};
+use crate::shogi::{last_move_ki2, pos2img, pos2usi, MoveChecker};
 use crate::{Error, Result};
 use bsky_sdk::api::app::bsky;
 use bsky_sdk::api::app::bsky::feed::defs::{PostView, ThreadViewPost, ThreadViewPostRepliesItem};
@@ -10,7 +10,7 @@ use bsky_sdk::api::records::{KnownRecord, Record};
 use bsky_sdk::api::types::string::Datetime;
 use bsky_sdk::api::types::Union;
 use bsky_sdk::BskyAgent;
-use shogi_core::{Position, ToUsi};
+use shogi_core::{Position, PositionStatus, ToUsi};
 use shogi_usi_parser::FromUsi;
 
 pub struct Bot {
@@ -30,21 +30,21 @@ impl Bot {
         let pos = if let Some(Union::Refs(RecordEmbedRefs::AppBskyEmbedImagesMain(images))) =
             &record.embed
         {
-            Position::from_usi(&images.images[0].alt)?
+            Position::from_usi(&images.images[0].alt).unwrap_or_default()
         } else {
             Default::default()
         };
         log::debug!("{}", pos.to_sfen_owned());
         let mut checker = MoveChecker::new(pos)?;
+        let mut output = None;
         // find valid reply
         for reply in latest.data.replies.unwrap_or_default().iter().rev() {
             if let Union::Refs(ThreadViewPostRepliesItem::ThreadViewPost(post)) = reply {
                 if let Record::Known(KnownRecord::AppBskyFeedPost(record)) = &post.post.record {
                     log::debug!("{}", record.text);
                     match checker.try_move(&record.text) {
-                        Ok(pos) => {
-                            let output = self.reply_position(&post.post, pos).await?;
-                            log::info!("{:?}", output.data);
+                        Ok(_) => {
+                            output = Some(self.reply_position(&post.post, &checker.pos).await?);
                             break;
                         }
                         Err(e) => {
@@ -52,6 +52,44 @@ impl Bot {
                         }
                     }
                 }
+            }
+        }
+        // check status and post if game is over
+        if let Some(output) = output {
+            if let Some(result) = match checker.status() {
+                PositionStatus::BlackWins => Some("先手の勝ち"),
+                PositionStatus::WhiteWins => Some("後手の勝ち"),
+                PositionStatus::Draw => Some("引き分け"),
+                _ => None,
+            } {
+                log::debug!("{:?}", checker.status());
+                let text = format!("{}手で{}", checker.pos.ply() - 1, result);
+                self.agent
+                    .create_record(bsky_sdk::api::app::bsky::feed::post::RecordData {
+                        created_at: Datetime::now(),
+                        embed: Some(Union::Refs(RecordEmbedRefs::AppBskyEmbedRecordMain(
+                            Box::new(
+                                bsky::embed::record::MainData {
+                                    record:
+                                        bsky_sdk::api::com::atproto::repo::strong_ref::MainData {
+                                            cid: output.data.cid,
+                                            uri: output.data.uri,
+                                        }
+                                        .into(),
+                                }
+                                .into(),
+                            ),
+                        ))),
+                        entities: None,
+                        facets: None,
+                        labels: None,
+                        langs: Some(vec!["ja".parse().expect("failed to parse lang")]),
+                        reply: None,
+                        tags: None,
+                        text,
+                    })
+                    .await?;
+                self.post_init().await?;
             }
         }
         Ok(())
@@ -121,7 +159,7 @@ impl Bot {
                 entities: None,
                 facets: None,
                 labels: None,
-                langs: None,
+                langs: Some(vec!["ja".parse().expect("failed to parse lang")]),
                 reply,
                 tags: None,
                 text,
@@ -139,10 +177,10 @@ impl Bot {
                 entities: None,
                 facets: None,
                 labels: None,
-                langs: None,
+                langs: Some(vec!["ja".parse().expect("failed to parse lang")]),
                 reply: None,
                 tags: None,
-                text: String::from("start"),
+                text: String::from("対局開始"),
             })
             .await?)
     }
@@ -176,14 +214,7 @@ impl Bot {
             .map_err(bsky_sdk::Error::from)?
             .data
             .blob;
-        let alt = format!(
-            "startpos moves {}",
-            pos.moves()
-                .iter()
-                .map(|mv| mv.to_usi_owned())
-                .collect::<Vec<_>>()
-                .join(" ")
-        );
+        let alt = pos2usi(pos)?;
         Ok(Some(Union::Refs(
             bsky::feed::post::RecordEmbedRefs::AppBskyEmbedImagesMain(Box::new(
                 bsky::embed::images::MainData {
